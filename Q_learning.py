@@ -7,9 +7,13 @@ import torch
 from src.crafter_wrapper import Env
 
 
-class RandomAgent:
-    """An example Random Agent"""
+class Q_learning:
+    """A Q Learning Agent"""
 
+    #todo: change policy
+    #what is the action space?
+    #maybe use points in the game as reward?
+    #what as penalty? wall hit, dying, coming close to a monster? close to an arrow?
     def __init__(self, action_num) -> None:
         self.action_num = action_num
         # a uniformly random policy
@@ -17,8 +21,10 @@ class RandomAgent:
             torch.ones(action_num) / action_num
         )
 
+    #todo: observe environment
     def act(self, observation):
         """ Since this is a random agent the observation is not used."""
+        
         return self.policy.sample().item()
 
 
