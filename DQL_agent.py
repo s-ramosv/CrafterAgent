@@ -1,4 +1,4 @@
-#I tried to use the teachers rainbow solution for our problem
+#I tried to use the teachers rainbow solution for our problem and used the random agent as a template
 
 import argparse
 import pickle
@@ -29,134 +29,10 @@ import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+sns.set()
 
 import os
 os.environ['KMP_DUPLICATE_LIB_OK']='True' #this is not safe!!!
-
-#%matplotlib inline
-#%config InlineBackend.figure_format = 'retina'
-
-sns.set()
-
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"OpenAI Gym: {gym.__version__}. \t\tShould be: ~0.26.x")
-print(f"PyTorch   : {torch.__version__}.  \tShould be: >=1.2.x+cu100")
-print(f"DEVICE    : {DEVICE}. \t\tShould be: cuda")
-
-def reset_rng(seed=42):
-    print(f"Setting all rngs to seed={seed}")
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-
-reset_rng()
-
-# Define some helpers: Gym Wrappers and visualization functions
-
-class TorchWrapper(gym.ObservationWrapper):
-    """ Applies a couple of transformations depending on the mode.
-        Receives numpy arrays and returns torch tensors.
-    """
-
-    def __init__(self, env):
-        super().__init__(env)
-        self._transform = T.Compose([
-            lambda obs: (obs * int(255 / 9)).swapaxes(1, 0),
-            lambda obs: torch.from_numpy(obs).permute(2, 1, 0)
-        ])
-    
-    def observation(self, obs):
-        return self._transform(obs).unsqueeze(0).to(DEVICE)
-
-
-class FrameStack(gym.Wrapper):
-    """Stack k last frames. """
-
-    def __init__(self, env, k, verbose=False):
-        super().__init__(env)
-        self.k = k
-        self.frames = deque([], maxlen=k)
-
-    def reset(self):
-        observation, info = self.env.reset()
-        for _ in range(self.k):
-            self.frames.append(observation)
-        return self._get_ob(), info
-
-    def step(self, action):
-        observation, reward, termination, truncation, info = self.env.step(action)
-        self.frames.append(observation)
-        return self._get_ob(), reward, termination, truncation, info
-
-    def _get_ob(self):
-        assert len(self.frames) == self.k
-        if self.k == 1:
-            return self.frames.pop()
-        return np.concatenate(list(self.frames), axis=2)
-
-
-def plot_stats(stats, y="ep_rewards", hue=None, window=10):
-    df = pd.DataFrame(stats)
-
-    if window:
-        new_col = f"avg_{y}"
-        if hue is not None:
-            df[new_col] = df.groupby(hue)[y].rolling(window=window).mean().reset_index(0,drop=True)
-        else:
-            df[new_col] = df[y].rolling(window=window).mean()
-    
-    y = f"avg_{y}" if window else y
-    with matplotlib.rc_context({'figure.figsize':(10, 6)}):
-        sns.lineplot(x="step_idx", y=y, hue=hue, data=df)
-
-#define trainings routine
-def train(agent, env, step_num=100_000):
-    
-    stats, N = {"step_idx": [0], "ep_rewards": [0.0], "ep_steps": [0.0]}, 0
-
-    (state, info), done = env.reset(), False
-    for step in range(step_num):
-
-        action = agent.step(state)
-        
-        # separate episode termination and episode truncation signals
-        # is a very recent change in the Gym API. In Crafter, these two signals
-        # are subsumed by `done`.
-        state_, reward, terminated, truncated, info = env.step(action)
-        done = terminated or truncated
-        
-        agent.learn(state, action, reward, state_, done)
-
-        # some envs just update the state and are not returning a new one
-        state = state_.clone()
-
-        # stats
-        stats["ep_rewards"][N] += reward
-        stats["ep_steps"][N] += 1
-
-        if done:
-            # episode done, reset env!
-            (state, info), done = env.reset(), False
-        
-            # some more stats
-            if N % 10 == 0:
-                print("[{0:3d}][{1:6d}], R/ep={2:6.2f}, steps/ep={3:2.0f}.".format(
-                    N, step,
-                    torch.tensor(stats["ep_rewards"][-10:]).mean().item(),
-                    torch.tensor(stats["ep_steps"][-10:]).mean().item(),
-                ))
-
-            stats["ep_rewards"].append(0.0)  # reward accumulator for a new episode
-            stats["ep_steps"].append(0.0)    # reward accumulator for a new episode
-            stats["step_idx"].append(step)
-            N += 1
-
-    print("[{0:3d}][{1:6d}], R/ep={2:6.2f}, steps/ep={3:2.0f}.".format(
-        N, step, torch.tensor(stats["ep_rewards"][-10:]).mean().item(),
-        torch.tensor(stats["ep_steps"][-10:]).mean().item(),
-    ))
-    stats["agent"] = [agent.__class__.__name__ for _ in range(N+1)]
-    return stats
 
 class ReplayMemory:
     def __init__(self, size=1000, batch_size=32):
@@ -254,13 +130,13 @@ def get_estimator(action_num, input_ch=3, lin_size=32):
         nn.Linear(9 * 16, lin_size),
         nn.ReLU(inplace=True),
         nn.Linear(lin_size, action_num),
-    ).to(DEVICE)
+    ).to(DEVICE) #opt.device (cuda or cpu)
 
-#Define a DQN Agent
-class DQN:
-    def __init__(
-        self,
-        estimator,
+
+class DQLAgent:
+    """Deep Q Learning Agent"""
+
+    def __init__(self, estimator,
         buffer,
         optimizer,
         epsilon_schedule,
@@ -269,7 +145,7 @@ class DQN:
         update_steps=4,
         update_target_steps=10,
         warmup_steps=100,
-    ):
+    ) -> None:
         self._estimator = estimator
         self._target_estimator = deepcopy(estimator)
         self._buffer = buffer
@@ -283,7 +159,17 @@ class DQN:
         self._step_cnt = 0
         assert warmup_steps > self._buffer._batch_size, (
             "You should have at least a batch in the ER.")
-    
+
+        #update self policy here? maybe like this:
+        # self._policy = EpsilonGreedyPolicy(estimator, epsilon_schedule)
+        #self._policy = GreedyPolicy(estimator)
+
+        # self.action_num = action_num
+        # # a uniformly random policy
+        # self.policy = torch.distributions.Categorical(
+        #     torch.ones(action_num) / action_num
+        #)
+
     def step(self, state):
         # implement an epsilon greedy policy using the
         # estimator and epsilon schedule attributes.
@@ -352,38 +238,8 @@ class DQN:
         self._optimizer.zero_grad()
         loss.backward()
         self._optimizer.step()
-
-env = Env("train", 5000) #correct? #gym.make(envs.easy) #change that, it gives back an environment from gym
-env = TorchWrapper(env)
-net = get_estimator(env.action_space.n) #I think our env has no .n but an action space
-
-
-stats = train(
-    DQN(
-        net,
-        ReplayMemory(size=1000, batch_size=32),
-        O.Adam(net.parameters(), lr=1e-3, eps=1e-4),
-        get_epsilon_schedule(start=1.0, end=0.1, steps=4000),
-        env.action_space.n, #I think our env has no .n but an action space
-        warmup_steps=100,
-        update_steps=2,
-    ),
-    env,
-    step_num=7_000  # change the experiment length if it's learning but not reaching about .95
-)
-
-#there is also something with a partial observable maze - maybe this would fit better?
-
-class RandomAgent:
-    """An example Random Agent"""
-
-    def __init__(self, action_num) -> None:
-        self.action_num = action_num
-        # a uniformly random policy
-        self.policy = torch.distributions.Categorical(
-            torch.ones(action_num) / action_num
-        )
-
+    
+    #update this method
     def act(self, observation):
         """ Since this is a random agent the observation is not used."""
         return self.policy.sample().item()
@@ -437,11 +293,27 @@ def _info(opt):
 
 def main(opt):
     _info(opt)
-    #opt.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    opt.device = torch.device("cpu")
+    opt.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #opt.device = torch.device("cpu")
     env = Env("train", opt)
     eval_env = Env("eval", opt)
-    agent = RandomAgent(env.action_space.n)
+
+    net = get_estimator(env.action_space.n) #I think our env has no .n but an action space
+
+    agent = DQLAgent(
+        net,
+        ReplayMemory(size=1000, batch_size=32),
+        O.Adam(net.parameters(), lr=1e-3, eps=1e-4),
+        get_epsilon_schedule(start=1.0, end=0.1, steps=4000),
+        env.action_space.n, #I think our env has no .n but an action space
+        warmup_steps=100,
+        update_steps=2,
+    )
+                    
+
+    print(f"OpenAI Gym: {gym.__version__}. \t\tShould be: ~0.26.x")
+    print(f"PyTorch   : {torch.__version__}.  \tShould be: >=1.2.x+cu100")
+    print(f"DEVICE    : {opt.device}. \t\tShould be: cuda")
 
     # main loop
     ep_cnt, step_cnt, done = 0, 0, True
