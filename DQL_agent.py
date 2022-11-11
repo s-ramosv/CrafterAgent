@@ -34,6 +34,59 @@ sns.set()
 import os
 os.environ['KMP_DUPLICATE_LIB_OK']='True' #this is not safe!!!
 
+#define trainings routine
+def train(agent, env, step_num, opt):
+    
+    stats, N = {"step_idx": [0], "ep_rewards": [0.0], "ep_steps": [0.0]}, 0
+
+    (state, info), done = env.reset(), False 
+    for step in range(step_num):
+
+        action = agent.step(state)
+        
+        # separate episode termination and episode truncation signals
+        # is a very recent change in the Gym API. In Crafter, these two signals
+        # are subsumed by `done`.
+        state_, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+        
+        agent.learn(state, action, reward, state_, done, opt)
+
+        # some envs just update the state and are not returning a new one
+        state = state_.clone()
+
+        # stats
+        stats["ep_rewards"][N] += reward
+        stats["ep_steps"][N] += 1
+
+        # evaluate once in a while
+        if step % opt.eval_interval == 0:
+            eval(agent, env, step, opt)
+
+        if done:
+            # episode done, reset env!
+            (state, info), done = env.reset(), False
+        
+            # some more stats
+            if N % 10 == 0:
+                print("[{0:3d}][{1:6d}], R/ep={2:6.2f}, steps/ep={3:2.0f}.".format(
+                    N, step,
+                    torch.tensor(stats["ep_rewards"][-10:]).mean().item(),
+                    torch.tensor(stats["ep_steps"][-10:]).mean().item(),
+                ))
+
+            stats["ep_rewards"].append(0.0)  # reward accumulator for a new episode
+            stats["ep_steps"].append(0.0)    # reward accumulator for a new episode
+            stats["step_idx"].append(step)
+            N += 1
+
+    print("[{0:3d}][{1:6d}], R/ep={2:6.2f}, steps/ep={3:2.0f}.".format(
+        N, step, torch.tensor(stats["ep_rewards"][-10:]).mean().item(),
+        torch.tensor(stats["ep_steps"][-10:]).mean().item(),
+    ))
+    stats["agent"] = [agent.__class__.__name__ for _ in range(N+1)]
+    return stats
+
 class ReplayMemory:
     def __init__(self, size=1000, batch_size=32):
         self._buffer = deque(maxlen=size)
@@ -42,7 +95,7 @@ class ReplayMemory:
     def push(self, transition):
         self._buffer.append(transition)
     
-    def sample(self):
+    def sample(self, opt):
         """ Sample from self._buffer
 
             Should return a tuple of tensors of size: 
@@ -62,11 +115,11 @@ class ReplayMemory:
 
         # reshape, convert if needed, put on device (use torch.to(DEVICE))
         return (
-            torch.cat(s, 0).to(DEVICE),
-            torch.tensor(a, dtype=torch.int64).unsqueeze(1).to(DEVICE),
-            torch.tensor(r, dtype=torch.float32).unsqueeze(1).to(DEVICE),
-            torch.cat(s_, 0).to(DEVICE),
-            torch.tensor(d, dtype=torch.uint8).unsqueeze(1).to(DEVICE)
+            torch.cat(s, 0).to(opt.device),
+            torch.tensor(a, dtype=torch.int64).unsqueeze(1).to(opt.device),
+            torch.tensor(r, dtype=torch.float32).unsqueeze(1).to(opt.device),
+            torch.cat(s_, 0).to(opt.device),
+            torch.tensor(d, dtype=torch.uint8).unsqueeze(1).to(opt.device)
         )
     
     def __len__(self):
@@ -117,7 +170,7 @@ class View(nn.Module):
         return x.view(x.size(0), -1)
 
 
-def get_estimator(action_num, input_ch=3, lin_size=32):
+def get_estimator(action_num, opt, input_ch=3, lin_size=32):
     return nn.Sequential(
         ByteToFloat(), #change that if we use environment hack
         nn.Conv2d(input_ch, 16, kernel_size=3),
@@ -130,7 +183,7 @@ def get_estimator(action_num, input_ch=3, lin_size=32):
         nn.Linear(9 * 16, lin_size),
         nn.ReLU(inplace=True),
         nn.Linear(lin_size, action_num),
-    ).to(DEVICE) #opt.device (cuda or cpu)
+    ).to(opt.device)
 
 
 class DQLAgent:
@@ -188,7 +241,7 @@ class DQLAgent:
             return torch.randint(self._action_num, (1,)).item()
 
 
-    def learn(self, state, action, reward, state_, done):
+    def learn(self, state, action, reward, state_, done, opt):
 
         # add transition to the experience replay
         self._buffer.push((state, action, reward, state_, done))
@@ -293,29 +346,32 @@ def _info(opt):
 
 def main(opt):
     _info(opt)
+
     opt.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     #opt.device = torch.device("cpu")
     env = Env("train", opt)
     eval_env = Env("eval", opt)
 
-    net = get_estimator(env.action_space.n) #I think our env has no .n but an action space
+    #DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"OpenAI Gym: {gym.__version__}. \t\tShould be: ~0.26.x")
+    print(f"PyTorch   : {torch.__version__}.  \tShould be: >=1.2.x+cu100")
+    print(f"DEVICE    : {opt.device}. \t\tShould be: cuda")
+
+    net = get_estimator(env.action_space.n, opt) 
 
     agent = DQLAgent(
         net,
         ReplayMemory(size=1000, batch_size=32),
         O.Adam(net.parameters(), lr=1e-3, eps=1e-4),
         get_epsilon_schedule(start=1.0, end=0.1, steps=4000),
-        env.action_space.n, #I think our env has no .n but an action space
+        env.action_space.n,
         warmup_steps=100,
         update_steps=2,
     )
                     
+    train(agent=agent, env=env, step_num=opt.steps, opt=opt) #like this and then no loop?
 
-    print(f"OpenAI Gym: {gym.__version__}. \t\tShould be: ~0.26.x")
-    print(f"PyTorch   : {torch.__version__}.  \tShould be: >=1.2.x+cu100")
-    print(f"DEVICE    : {opt.device}. \t\tShould be: cuda")
-
-    # main loop
+    """ # main loop
     ep_cnt, step_cnt, done = 0, 0, True
     while step_cnt < opt.steps or not done:
         if done:
@@ -329,7 +385,7 @@ def main(opt):
 
         # evaluate once in a while
         if step_cnt % opt.eval_interval == 0:
-            eval(agent, eval_env, step_cnt, opt)
+            eval(agent, eval_env, step_cnt, opt) """
 
 
 def get_options():
