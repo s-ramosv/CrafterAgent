@@ -179,6 +179,22 @@ def get_estimator(action_num, opt, input_ch=1, lin_size=32):
     #the input of the network is [1, 128, 64, 64] and the output is [lin_size, action_num]
     return nn.Sequential(
         ByteToFloat(),
+        nn.Conv2d(input_ch, 64, kernel_size=4, stride=3),
+        nn.ReLU(),
+        nn.Conv2d(64, 64, kernel_size=3, stride=2),
+        nn.ReLU(),
+        nn.Conv2d(64, 64, kernel_size=3, stride=1),
+        nn.ReLU(),
+        View(),
+        nn.Linear(4096, lin_size),
+        nn.ReLU(),
+        nn.Linear(lin_size, action_num),
+    ).to(opt.device)
+
+""" def get_estimator(action_num, opt, input_ch=1, lin_size=32):
+    #the input of the network is [1, 128, 64, 64] and the output is [lin_size, action_num]
+    return nn.Sequential(
+        ByteToFloat(),
         nn.Conv2d(input_ch, 32, kernel_size=8, stride=4),
         nn.ReLU(inplace=True),
         nn.Conv2d(32, 64, kernel_size=4, stride=2),
@@ -189,7 +205,7 @@ def get_estimator(action_num, opt, input_ch=1, lin_size=32):
         nn.Linear(1024, lin_size),
         nn.ReLU(inplace=True),
         nn.Linear(lin_size, action_num),
-    ).to(opt.device)
+    ).to(opt.device) """
 
 """ def get_estimator(action_num, opt, input_ch=3, lin_size=32):
     return nn.Sequential(
