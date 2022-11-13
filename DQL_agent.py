@@ -21,7 +21,7 @@ import torch.optim as O
 from torchvision import transforms as T
 from PIL import Image
 
-import gymnasium as gym #pip install gymnasium, install all other stuff with conda first and then use pip for the rest
+import gymnasium as gym #pip install gymnasium, install all other stuff with conda first and then use pip for the rest, not used
 
 
 import pandas as pd
