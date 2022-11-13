@@ -39,7 +39,7 @@ def train(agent, env, step_num, opt):
     
     stats, N = {"step_idx": [0], "ep_rewards": [0.0], "ep_steps": [0.0]}, 0
 
-    (state, info), done = env.reset(), False 
+    state, done = env.reset(), False #before: (state, info), done = env.reset(), False
     for step in range(step_num):
 
         action = agent.step(state)
@@ -47,8 +47,8 @@ def train(agent, env, step_num, opt):
         # separate episode termination and episode truncation signals
         # is a very recent change in the Gym API. In Crafter, these two signals
         # are subsumed by `done`.
-        state_, reward, terminated, truncated, info = env.step(action)
-        done = terminated or truncated
+        state_, reward, done, info = env.step(action) #before: state_, reward, terminated, truncated, info = env.step(action)
+        #done = terminated or truncated
         
         agent.learn(state, action, reward, state_, done, opt)
 
@@ -65,7 +65,7 @@ def train(agent, env, step_num, opt):
 
         if done:
             # episode done, reset env!
-            (state, info), done = env.reset(), False
+            state, done = env.reset(), False #before: (state, info), done = env.reset(), False
         
             # some more stats
             if N % 10 == 0:
@@ -113,6 +113,11 @@ class ReplayMemory:
         # sample
         s, a, r, s_, d = zip(*random.sample(self._buffer, self._batch_size))
 
+        #only for testing
+        #t = torch.tensor(d)
+        #t.unsqueeze(1)
+        #t.to(opt.device)
+
         # reshape, convert if needed, put on device (use torch.to(DEVICE))
         return (
             torch.cat(s, 0).to(opt.device),
@@ -159,6 +164,7 @@ class ByteToFloat(nn.Module):
     """ Converts ByteTensor to FloatTensor and rescales.
     """
     def forward(self, x):
+        return x.float() #at crafter we have gray scales which is already between 0 and 1
         assert (
             x.dtype == torch.uint8
         ), "The model expects states of type ByteTensor."
@@ -169,8 +175,23 @@ class View(nn.Module):
     def forward(self, x):
         return x.view(x.size(0), -1)
 
+def get_estimator(action_num, opt, input_ch=128, lin_size=32):
+    #the input of the network is [1, 128, 64, 64] and the output is [lin_size, action_num]
+    return nn.Sequential(
+        ByteToFloat(),
+        nn.Conv2d(input_ch, 32, kernel_size=8, stride=4),
+        nn.ReLU(inplace=True),
+        nn.Conv2d(32, 64, kernel_size=4, stride=2),
+        nn.ReLU(inplace=True),
+        nn.Conv2d(64, 64, kernel_size=3, stride=1),
+        nn.ReLU(inplace=True),
+        View(),
+        nn.Linear(1024, lin_size),
+        nn.ReLU(inplace=True),
+        nn.Linear(lin_size, action_num),
+    ).to(opt.device)
 
-def get_estimator(action_num, opt, input_ch=3, lin_size=32):
+""" def get_estimator(action_num, opt, input_ch=3, lin_size=32):
     return nn.Sequential(
         ByteToFloat(), #change that if we use environment hack
         nn.Conv2d(input_ch, 16, kernel_size=3),
@@ -184,7 +205,7 @@ def get_estimator(action_num, opt, input_ch=3, lin_size=32):
         nn.ReLU(inplace=True),
         nn.Linear(lin_size, action_num),
     ).to(opt.device)
-
+ """
 
 class DQLAgent:
     """Deep Q Learning Agent"""
@@ -252,7 +273,7 @@ class DQLAgent:
 
         if self._step_cnt % self._update_steps == 0:
             # sample from experience replay and do an update
-            batch = self._buffer.sample() 
+            batch = self._buffer.sample(opt) #before: batch = self._buffer.sample()
             self._update(*batch)
         
         # update the target estimator
@@ -266,9 +287,12 @@ class DQLAgent:
         # target network in the computational graph.
 
         # Compute Q(s, * | θ) and Q(s', . | θ^)
-        q_values = self._estimator(states)
+        #print(states.shape)
+        #states = torch.unsqueeze(states, 0)
+        #print(states.shape)
+        q_values = self._estimator(torch.unsqueeze(states, 0)) #before: q_values = self._estimator(states)
         with torch.no_grad():
-            q_values_ = self._target_estimator(states_)
+            q_values_ = self._target_estimator(torch.unsqueeze(states_, 0))
         
         # compute Q(s, a) and max_a' Q(s', a')
         qsa = q_values.gather(1, actions)
@@ -295,7 +319,7 @@ class DQLAgent:
     #update this method
     def act(self, observation):
         """ Since this is a random agent the observation is not used."""
-        return self.policy.sample().item()
+        #return self.policy.sample().item()
 
 
 def _save_stats(episodic_returns, crt_step, path):
@@ -320,7 +344,9 @@ def eval(agent, env, crt_step, opt):
         obs, done = env.reset(), False
         episodic_returns.append(0)
         while not done:
-            action = agent.act(obs)
+            #action = agent.act(obs) #agent.step gives also an action -> use agent.step
+            action = agent.step(state=obs)
+
             obs, reward, done, info = env.step(action)
             episodic_returns[-1] += reward
 
@@ -357,6 +383,8 @@ def main(opt):
     print(f"PyTorch   : {torch.__version__}.  \tShould be: >=1.2.x+cu100")
     print(f"DEVICE    : {opt.device}. \t\tShould be: cuda")
 
+    print(env.action_space.n)
+    
     net = get_estimator(env.action_space.n, opt) 
 
     agent = DQLAgent(
