@@ -175,7 +175,7 @@ class View(nn.Module):
     def forward(self, x):
         return x.view(x.size(0), -1)
 
-def get_estimator(action_num, opt, input_ch=128, lin_size=32):
+def get_estimator(action_num, opt, input_ch=1, lin_size=32):
     #the input of the network is [1, 128, 64, 64] and the output is [lin_size, action_num]
     return nn.Sequential(
         ByteToFloat(),
@@ -256,7 +256,7 @@ class DQLAgent:
 
         if next(self._epsilon) < torch.rand(1).item():
             with torch.no_grad():
-                qvals = self._estimator(state)
+                qvals = self._estimator(torch.unsqueeze(state, 0).transpose(0, 1)) #before: qvals = self._estimator(state)
                 return qvals.argmax()
         else:
             return torch.randint(self._action_num, (1,)).item()
@@ -290,11 +290,13 @@ class DQLAgent:
         #print(states.shape)
         #states = torch.unsqueeze(states, 0)
         #print(states.shape)
-        q_values = self._estimator(torch.unsqueeze(states, 0)) #before: q_values = self._estimator(states)
+        q_values = self._estimator(torch.unsqueeze(states, 0).transpose(0, 1)) #before: q_values = self._estimator(states)
         with torch.no_grad():
-            q_values_ = self._target_estimator(torch.unsqueeze(states_, 0))
+            q_values_ = self._target_estimator(torch.unsqueeze(states_, 0).transpose(0, 1))
         
         # compute Q(s, a) and max_a' Q(s', a')
+        #print("actions", actions.shape)
+        #print("q_values.shape: ", q_values.shape)
         qsa = q_values.gather(1, actions)
         qsa_ = q_values_.max(1, keepdim=True)[0]
 
@@ -435,7 +437,7 @@ def get_options():
     parser.add_argument(
         "-hist-len",
         "--history-length",
-        default=4,
+        default=1, #before =4
         type=int,
         help="The number of frames to stack when creating an observation.",
     )
