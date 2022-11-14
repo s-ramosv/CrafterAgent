@@ -407,7 +407,7 @@ def main(opt):
 
     agent = DQLAgent(
         net,
-        ReplayMemory(size=1000, batch_size=32),
+        ReplayMemory(size=1000, batch_size=64),
         O.Adam(net.parameters(), lr=1e-3, eps=1e-4),
         get_epsilon_schedule(start=1.0, end=0.1, steps=4000),
         env.action_space.n,
